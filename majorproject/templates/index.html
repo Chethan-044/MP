@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Privacy System — Face &amp; License Plate Encryption</title>
+    <meta name="description"
+        content="Privacy-preserving video processing pipeline with YOLO detection and chaotic XOR encryption for faces and license plates.">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+    <!-- ═══════════════════════════════════════════════ HEADER -->
+    <header class="header" id="appHeader">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0110 0v4" />
+                    </svg>
+                </div>
+                <div>
+                    <h1>Traffic Video Privacy System</h1>
+                    <p class="subtitle">Face &amp; License Plate Encryption Pipeline</p>
+                </div>
+            </div>
+            <div class="pipeline-badge" id="pipelineBadge">
+                <span class="badge-dot"></span>
+                <span id="pipelineStatus">Pipeline Ready</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+
+        <!-- ═══════════════════════════════════ STEP 1 -->
+        <section class="step-card" id="step1">
+            <div class="step-header">
+                <div class="step-number" id="stepNum1">1</div>
+                <div>
+                    <h2>Video Selection &amp; Frame Extraction</h2>
+                    <p class="step-desc">Upload a video and extract individual frames for processing</p>
+                </div>
+            </div>
+
+            <div class="step-body">
+                <!-- upload zone -->
+                <div class="upload-zone" id="uploadZone">
+                    <div class="upload-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                    </div>
+                    <p class="upload-main-text">Drag &amp; drop your video here or click to browse</p>
+                    <p class="upload-formats">MP4 · AVI · MOV · MKV</p>
+                    <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv" hidden>
+                    <button class="btn btn-primary" id="selectVideoBtn">Select Video</button>
+                </div>
+
+                <!-- file info (after upload) -->
+                <div class="file-info" id="fileInfo" style="display:none">
+                    <div class="file-info-card">
+                        <div class="file-info-row">
+                            <span class="file-label">Selected Video</span>
+                            <span class="file-value" id="fileName">—</span>
+                        </div>
+                        <div class="file-info-row">
+                            <span class="file-label">Total Frames</span>
+                            <span class="file-value" id="totalFrames">—</span>
+                        </div>
+                        <div class="file-info-row">
+                            <span class="file-label">FPS</span>
+                            <span class="file-value" id="videoFps">—</span>
+                        </div>
+                        <div class="file-info-row">
+                            <span class="file-label">Resolution</span>
+                            <span class="file-value" id="videoRes">—</span>
+                        </div>
+                        <button class="btn btn-secondary" id="changeVideoBtn">Change Video</button>
+                    </div>
+                    <button class="btn btn-primary" id="extractBtn" disabled>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="2" width="20" height="20" rx="2" />
+                            <path d="M10 2v20" />
+                            <path d="M2 12h20" />
+                        </svg>
+                        Extract Frames
+                    </button>
+                </div>
+
+                <!-- progress -->
+                <div class="progress-section" id="extractProgress" style="display:none">
+                    <div class="progress-label">
+                        <span>Extracting Frames</span>
+                        <span id="extractPercent">0 %</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="extractFill"></div>
+                    </div>
+                    <p class="progress-detail" id="extractDetail">0 / 0 frames</p>
+                </div>
+
+                <!-- status -->
+                <div class="status-badge success" id="extractStatus" style="display:none">
+                    <span class="status-icon">✓</span>
+                    <span id="extractStatusText"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════ STEP 2 -->
+        <section class="step-card locked" id="step2">
+            <div class="step-header">
+                <div class="step-number" id="stepNum2">2</div>
+                <div>
+                    <h2>Detection &amp; Encryption</h2>
+                    <p class="step-desc">YOLO face &amp; license plate detection with chaotic XOR encryption</p>
+                </div>
+            </div>
+
+            <div class="step-body">
+                <button class="btn btn-primary" id="detectBtn" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    Detect Face &amp; License Plate
+                </button>
+
+                <div class="progress-section" id="detectProgress" style="display:none">
+                    <div class="progress-label">
+                        <span>Detecting &amp; Encrypting</span>
+                        <span id="detectPercent">0 %</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="detectFill"></div>
+                    </div>
+                    <p class="progress-detail" id="detectDetail">0 / 0 frames</p>
+                </div>
+
+                <!-- detection counts -->
+                <div class="detection-stats" id="detectionStats" style="display:none">
+                    <div class="stat-card">
+                        <span class="stat-label">Faces Detected</span>
+                        <span class="stat-value" id="facesCount">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Plates Detected</span>
+                        <span class="stat-value" id="platesCount">0</span>
+                    </div>
+                </div>
+
+                <div class="status-badge success" id="detectStatus" style="display:none">
+                    <span class="status-icon">✓</span>
+                    <span id="detectStatusText"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════ STEP 3 -->
+        <section class="step-card locked" id="step3">
+            <div class="step-header">
+                <div class="step-number" id="stepNum3">3</div>
+                <div>
+                    <h2>Video Reconstruction</h2>
+                    <p class="step-desc">Combine encrypted frames into the output video</p>
+                </div>
+            </div>
+
+            <div class="step-body">
+                <button class="btn btn-primary" id="combineBtn" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="23 7 16 12 23 17 23 7" />
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                    </svg>
+                    Combine Frames
+                </button>
+
+                <div class="progress-section" id="combineProgress" style="display:none">
+                    <div class="progress-label">
+                        <span>Combining Frames</span>
+                        <span id="combinePercent">0 %</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="combineFill"></div>
+                    </div>
+                    <p class="progress-detail" id="combineDetail">0 / 0 frames</p>
+                </div>
+
+                <div class="status-badge success" id="combineStatus" style="display:none">
+                    <span class="status-icon">✓</span>
+                    <span id="combineStatusText"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════════════════════ STEP 4 -->
+        <section class="step-card locked" id="step4">
+            <div class="step-header">
+                <div class="step-number" id="stepNum4">4</div>
+                <div>
+                    <h2>Video Output</h2>
+                    <p class="step-desc">Preview and download the encrypted video</p>
+                </div>
+            </div>
+
+            <div class="step-body">
+                <div class="video-wrapper" id="videoContainer" style="display:none">
+                    <video id="videoPlayer" controls playsinline>
+                        <source id="videoSource" type="video/mp4">
+                        Your browser does not support HTML5 video.
+                    </video>
+                </div>
+
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- toast container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
