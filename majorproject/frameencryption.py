@@ -33,7 +33,7 @@ MODELS_DIR = os.path.join(
 
 FACE_MODEL = os.path.join(
     MODELS_DIR,
-    "yolov8n-face.pt"
+    "best.pt"
 )
 
 PLATE_MODEL = os.path.join(

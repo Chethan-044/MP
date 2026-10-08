@@ -59,7 +59,7 @@ DEVICE     = "cpu"
 # LOAD YOLO MODELS  (same as frameencryption)
 # ============================================================
 
-FACE_MODEL_PATH  = os.path.join(MODELS_DIR, "yolov8n-face.pt")
+FACE_MODEL_PATH  = os.path.join(MODELS_DIR, "best.pt")
 PLATE_MODEL_PATH = os.path.join(MODELS_DIR, "license-plate-finetune-v1s.pt")
 
 print("[Pipeline] Loading models …")
