@@ -1,388 +1,98 @@
-import os
-import cv2
-import numpy as np
+"""
+decode_steganography.py  --  LSB EXTRACTION (used during decryption).
+
+Reads frame ID, ROI count and ROI boxes from the encrypted frame itself.
+YOLO is NOT needed.  Layout / constants come from steganography.py.
+"""
 import struct
+import sys
 
-from steganography import (
-    MAGIC,
-    VERSION,
-    HEADER_FORMAT,
-    HEADER_SIZE,
-    COORD_BYTES
-)
+import numpy as np
+
+from steganography import (COUNT_OFFSET, HDR, MAGIC, ROI_REC, STRIDE, MetadataNotFound,
+                           StegoError, parse_metadata)
 
 
-# ============================================================
-# SETTINGS
-# ============================================================
-
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
-
-STEGO_DIR = os.path.join(
-    BASE_DIR,
-    "encrypted_frames"
-)
-
-
-# ============================================================
-# EXTRACT BITS
-# ============================================================
-
-def extract_bits(frame, number_of_bits):
-
+def _read(frame, start_px, nbytes):
     flat = frame.reshape(-1)
-
-    if number_of_bits > len(flat):
-
-        raise ValueError(
-            "Requested more bits than frame capacity."
-        )
-
-    bits = flat[:number_of_bits] & 1
-
-    return bits.astype(np.uint8)
+    nbits = nbytes * 8
+    return np.packbits(flat[3 * start_px:3 * start_px + nbits] & 1).tobytes()
 
 
-# ============================================================
-# BITS → BYTES
-# ============================================================
+def extract_metadata(frame):
+    """Return the validated metadata dict.
+    Raises MetadataNotFound if nothing is embedded, StegoError if it is corrupt."""
+    if not isinstance(frame, np.ndarray) or frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
+        raise StegoError("Frame must be uint8 (H, W, 3).")
+    frame = np.ascontiguousarray(frame)
+    flat = frame.reshape(-1)
+    total = frame.shape[0] * frame.shape[1]
+    head_px = -(-HDR.size * 8 // 3)
+    if total < head_px + 1:
+        raise StegoError("Frame too small to hold metadata.")
 
-def bits_to_bytes(bits):
+    starts = np.arange(0, total - head_px + 1, STRIDE, dtype=np.int64)
+    magic_bits = np.unpackbits(np.frombuffer(MAGIC, dtype=np.uint8))
+    cand = np.ones(starts.size, dtype=bool)
+    for b in range(32):                                    # vectorised magic scan
+        cand &= (flat[3 * starts + b] & 1) == magic_bits[b]
 
-    if len(bits) % 8 != 0:
-
-        raise ValueError(
-            "Number of bits must be divisible by 8."
-        )
-
-    byte_array = np.packbits(bits)
-
-    return byte_array.tobytes()
-
-
-# ============================================================
-# READ HEADER
-# ============================================================
-
-def read_header(frame):
-
-    header_bits = extract_bits(
-        frame,
-        HEADER_SIZE * 8
-    )
-
-    header_bytes = bits_to_bytes(
-        header_bits
-    )
-
-    (
-        magic,
-        version,
-        frame_id,
-        box_count
-    ) = struct.unpack(
-        HEADER_FORMAT,
-        header_bytes
-    )
-
-    if magic != MAGIC:
-
-        raise ValueError(
-            "Invalid MAGIC. "
-            "This frame does not contain valid YOLO steganography data."
-        )
-
-    if version != VERSION:
-
-        raise ValueError(
-            f"Unsupported payload version: {version}"
-        )
-
-    return frame_id, box_count
+    last_err = None
+    for s in starts[cand]:
+        s = int(s)
+        try:
+            n = struct.unpack_from(">H", _read(frame, s, HDR.size), COUNT_OFFSET)[0]
+            size = HDR.size + n * ROI_REC.size + 4
+            if 3 * s + size * 8 > flat.size:
+                continue
+            return parse_metadata(_read(frame, s, size))
+        except StegoError as e:                            # maybe a false magic -> keep scanning
+            last_err = e
+    if last_err is not None:
+        raise last_err
+    raise MetadataNotFound(
+        "No embedded metadata found: not an encrypted frame, or it was re-encoded lossily "
+        "(JPEG / MP4). Encrypted video must be lossless.")
 
 
-# ============================================================
-# DECODE FRAME
-# ============================================================
-
-def decode_frame(frame):
-
-    # --------------------------------------------------------
-    # READ HEADER
-    # --------------------------------------------------------
-
-    frame_id, box_count = read_header(
-        frame
-    )
-
-
-    # --------------------------------------------------------
-    # CALCULATE PAYLOAD SIZE
-    # --------------------------------------------------------
-
-    # Every box contains:
-    #
-    # x1
-    # y1
-    # x2
-    # y2
-    #
-    # Each coordinate = 2 bytes
-
-    coordinates_per_box = 4
-
-    coordinate_bytes = (
-        box_count
-        * coordinates_per_box
-        * COORD_BYTES
-    )
-
-    total_payload_bytes = (
-        HEADER_SIZE
-        + coordinate_bytes
-    )
-
-
-    # --------------------------------------------------------
-    # EXTRACT COMPLETE PAYLOAD
-    # --------------------------------------------------------
-
-    total_bits = (
-        total_payload_bytes
-        * 8
-    )
-
-    bits = extract_bits(
-        frame,
-        total_bits
-    )
-
-    data = bits_to_bytes(
-        bits
-    )
-
-
-    # --------------------------------------------------------
-    # PARSE HEADER
-    # --------------------------------------------------------
-
-    (
-        magic,
-        version,
-        extracted_frame_id,
-        extracted_box_count
-    ) = struct.unpack(
-        HEADER_FORMAT,
-        data[:HEADER_SIZE]
-    )
-
-
-    # --------------------------------------------------------
-    # READ COORDINATES
-    # --------------------------------------------------------
-
-    boxes = []
-
-    offset = HEADER_SIZE
-
-    for _ in range(
-        extracted_box_count
-    ):
-
-        x1 = struct.unpack(
-            "<H",
-            data[
-                offset:
-                offset + 2
-            ]
-        )[0]
-
-        offset += 2
-
-
-        y1 = struct.unpack(
-            "<H",
-            data[
-                offset:
-                offset + 2
-            ]
-        )[0]
-
-        offset += 2
-
-
-        x2 = struct.unpack(
-            "<H",
-            data[
-                offset:
-                offset + 2
-            ]
-        )[0]
-
-        offset += 2
-
-
-        y2 = struct.unpack(
-            "<H",
-            data[
-                offset:
-                offset + 2
-            ]
-        )[0]
-
-        offset += 2
-
-
-        boxes.append(
-            (
-                x1,
-                y1,
-                x2,
-                y2
-            )
-        )
-
-
+def decode_frame(frame_or_path):
+    """Convenience helper: returns metadata dict with boxes formatted as (x1, y1, x2, y2)."""
+    if isinstance(frame_or_path, (str, bytes)):
+        from steganography import load_png
+        frame = load_png(frame_or_path)
+    else:
+        frame = frame_or_path
+    meta = extract_metadata(frame)
     return {
-        "frame_id": extracted_frame_id,
-        "box_count": extracted_box_count,
-        "boxes": boxes
+        "frame_id": meta["frame_id"],
+        "box_count": meta["roi_count"],
+        "boxes": [
+            (x, y, x + w, y + h) for x, y, w, h, _ in meta["rois"]
+        ],
+        "rois": meta["rois"],
+        "key_check": meta["key_check"],
+        "frame_w": meta["frame_w"],
+        "frame_h": meta["frame_h"],
     }
 
 
-# ============================================================
-# PROCESS ALL FRAMES
-# ============================================================
-
-files = sorted(
-    f
-    for f in os.listdir(
-        STEGO_DIR
-    )
-    if f.lower().endswith((".png", ".jpg", ".jpeg"))
-)
-
-
-if not files:
-
-    print(
-        "No PNG frames found."
-    )
-
-    exit()
-
-
-print(
-    f"Found {len(files)} stego frames."
-)
-
-print()
-
-
-# ============================================================
-# DECODE
-# ============================================================
-
-successful = 0
-failed = 0
-
-for filename in files:
-
-    path = os.path.join(
-        STEGO_DIR,
-        filename
-    )
-
-    frame = cv2.imread(
-        path
-    )
-
-    if frame is None:
-
-        print(
-            f"[ERROR] Cannot read {filename}"
-        )
-
-        failed += 1
-
-        continue
-
-
-    try:
-
-        result = decode_frame(
-            frame
-        )
-
-        print(
-            f"{filename}"
-        )
-
-        print(
-            f"  Frame ID : "
-            f"{result['frame_id']}"
-        )
-
-        print(
-            f"  Box Count: "
-            f"{result['box_count']}"
-        )
-
-
-        for i, box in enumerate(
-            result["boxes"],
-            start=1
-        ):
-
-            x1, y1, x2, y2 = box
-
-            print(
-                f"  Box {i}: "
-                f"Top-Left=({x1},{y1}) "
-                f"Bottom-Right=({x2},{y2})"
-            )
-
-
-        print()
-
-        successful += 1
-
-
-    except Exception as e:
-
-        print(
-            f"[ERROR] {filename}: {e}"
-        )
-
-        failed += 1
-
-
-# ============================================================
-# SUMMARY
-# ============================================================
-
-print(
-    "=" * 60
-)
-
-print(
-    "DECODING COMPLETE"
-)
-
-print(
-    "=" * 60
-)
-
-print(
-    f"Successful: {successful}"
-)
-
-print(
-    f"Failed    : {failed}"
-)
-
-print(
-    "=" * 60
-)
+if __name__ == "__main__":
+    import os
+    base = os.path.dirname(os.path.abspath(__file__))
+    stego_dir = os.path.join(base, "encrypted_frames")
+    files = sorted(f for f in os.listdir(stego_dir) if f.lower().endswith(".png")) if os.path.isdir(stego_dir) else []
+    if not files:
+        print("No PNG frames found in encrypted_frames/.")
+        sys.exit(0)
+    print(f"Found {len(files)} stego frames.\n")
+    success, fail = 0, 0
+    for name in files:
+        path = os.path.join(stego_dir, name)
+        try:
+            res = decode_frame(path)
+            print(f"{name} -> Frame ID: {res['frame_id']}, Box Count: {res['box_count']}, Boxes: {res['boxes']}")
+            success += 1
+        except Exception as e:
+            print(f"[ERROR] {name}: {e}")
+            fail += 1
+    print(f"\nDone: {success} succeeded, {fail} failed.")

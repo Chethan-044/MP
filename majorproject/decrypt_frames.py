@@ -1,398 +1,109 @@
+"""
+decrypt_frames.py  --  restore ROIs using ONLY the metadata embedded in each frame (no YOLO).
+
+Called by app.py:   python decrypt_frames.py --seed 0.37 --factor 5 --input <dir>
+Reads  <dir>/*.png        Writes  decrypted_frames/frame_<id>.png  (lossless)
+
+Steps per frame:  extract metadata -> verify (CRC, frame size, seed/factor, ROI bounds)
+                  -> XOR -> inverse column permutation -> inverse row permutation
+                  -> place ROI back at its original coordinates -> verify ROI CRC.
+A frame that fails ANY check is reported and NOT written (an encrypted frame is never
+saved as a decrypted one).  Exit code is non-zero if any frame failed.
+"""
+import argparse
 import os
-import cv2
+import sys
+import zlib
+
 import numpy as np
 
-from steganography import decode_frame
-
-
-# ============================================================
-# PATHS
-# ============================================================
-
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
-
-STEGO_DIR = os.path.join(
-    BASE_DIR,
-    "encrypted_frames"
-)
-
-DECRYPTED_DIR = os.path.join(
-    BASE_DIR,
-    "decrypted_frames"
-)
-
-os.makedirs(
-    DECRYPTED_DIR,
-    exist_ok=True
-)
-
-
-# ============================================================
-# CHAOS CACHE
-# ============================================================
-
-chaos_cache = {}
-
-
-# ============================================================
-# CHAOTIC SEQUENCE
-# ============================================================
-
-def chaos(shape):
-
-    h, w = shape[:2]
-
-    key = (h, w)
-
-    if key in chaos_cache:
-        return chaos_cache[key]
-
-    n = h * w
-
-    x = 0.37
-    y = 0.71
-
-    X = np.empty(n + 100)
-    Y = np.empty(n + 100)
-
-    for i in range(n + 100):
-
-        x, y = (
-            (
-                3.99 * x * (1 - x)
-                + 0.01 * y
-            ) % 1,
-
-            (
-                3.99 * y * (1 - y)
-                + 0.01 * x
-            ) % 1
-        )
-
-        X[i] = x
-        Y[i] = y
-
-    C = (X[100:] + Y[100:]) / 2
-
-    B = (
-        C >= 0.5
-    ).astype(np.uint8)
-
-    B = B.reshape(
-        h,
-        w
-    )
-
-    P = np.argsort(C)
-
-    chaos_cache[key] = B, P
-
-    return B, P
-
-
-# ============================================================
-# DECRYPT ROI
-# ============================================================
-
-def decrypt_roi(encrypted_roi):
-
-    """
-    Reverse the encryption performed by:
-
-        shuffled = pixels[P]
-
-        encrypted = shuffled XOR chaotic_mask
-
-    Decryption:
-
-        1. XOR encrypted data with chaotic mask
-        2. Reverse pixel permutation
-    """
-
-    B, P = chaos(
-        encrypted_roi.shape
-    )
-
-    # --------------------------------------------------------
-    # STEP 1
-    # Reverse XOR
-    # --------------------------------------------------------
-
-    shuffled = np.bitwise_xor(
-        encrypted_roi,
-        (B * 255)[:, :, None]
-    )
-
-    # --------------------------------------------------------
-    # STEP 2
-    # Reverse permutation
-    # --------------------------------------------------------
-
-    shuffled_pixels = shuffled.reshape(
-        -1,
-        3
-    )
-
-    original_pixels = np.empty_like(
-        shuffled_pixels
-    )
-
-    original_pixels[P] = shuffled_pixels
-
-    decrypted = original_pixels.reshape(
-        encrypted_roi.shape
-    )
-
-    return decrypted
-
-
-# ============================================================
-# PROCESS ONE FRAME
-# ============================================================
-
-def decrypt_frame(frame):
-
-    # --------------------------------------------------------
-    # GET COORDINATES FROM STEGANOGRAPHY
-    # --------------------------------------------------------
-
-    metadata = decode_frame(
-        frame
-    )
-
-    frame_id = metadata["frame_id"]
-
-    box_count = metadata["box_count"]
-
-    boxes = metadata["boxes"]
-
-    print(
-        f"Frame {frame_id} | "
-        f"Boxes: {box_count}"
-    )
-
-    # --------------------------------------------------------
-    # COPY FRAME
-    # --------------------------------------------------------
-
-    decrypted_frame = frame.copy()
-
-    H, W = frame.shape[:2]
-
-    # --------------------------------------------------------
-    # PROCESS EVERY ROI
-    # --------------------------------------------------------
-
-    for box_number, box in enumerate(
-        boxes,
-        start=1
-    ):
-
-        x1, y1, x2, y2 = box
-
-        # ----------------------------------------------------
-        # SAFETY CLAMP
-        # ----------------------------------------------------
-
-        x1 = max(
-            0,
-            min(W, x1)
-        )
-
-        y1 = max(
-            0,
-            min(H, y1)
-        )
-
-        x2 = max(
-            0,
-            min(W, x2)
-        )
-
-        y2 = max(
-            0,
-            min(H, y2)
-        )
-
-        if x2 <= x1 or y2 <= y1:
-
-            print(
-                f"  Box {box_number}: "
-                f"Invalid coordinates"
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # EXTRACT ENCRYPTED ROI
-        # ----------------------------------------------------
-
-        encrypted_roi = frame[
-            y1:y2,
-            x1:x2
-        ].copy()
-
-        # ----------------------------------------------------
-        # DECRYPT ROI
-        # ----------------------------------------------------
-
-        decrypted_roi = decrypt_roi(
-            encrypted_roi
-        )
-
-        # ----------------------------------------------------
-        # PUT DECRYPTED ROI BACK
-        # ----------------------------------------------------
-
-        decrypted_frame[
-            y1:y2,
-            x1:x2
-        ] = decrypted_roi
-
-        print(
-            f"  Box {box_number}: "
-            f"({x1},{y1}) → "
-            f"({x2},{y2}) decrypted"
-        )
-
-    return (
-        decrypted_frame,
-        metadata
-    )
-
-
-# ============================================================
-# GET INPUT FILES
-# ============================================================
-
-frame_files = sorted(
-    f
-    for f in os.listdir(
-        STEGO_DIR
-    )
-    if f.lower().endswith(
-        (".png", ".jpg", ".jpeg")
-    )
-)
-
-
-if not frame_files:
-
-    print(
-        "No encrypted/stego frames found."
-    )
-
-    exit()
-
-
-print(
-    f"Found {len(frame_files)} frames."
-)
-
-print()
-
-
-# ============================================================
-# PROCESS ALL FRAMES
-# ============================================================
-
-successful = 0
-failed = 0
-
-for filename in frame_files:
-
-    input_path = os.path.join(
-        STEGO_DIR,
-        filename
-    )
-
-    frame = cv2.imread(
-        input_path
-    )
-
-    if frame is None:
-
-        print(
-            f"[ERROR] Cannot read "
-            f"{filename}"
-        )
-
-        failed += 1
-
-        continue
+from decode_steganography import extract_metadata
+from frameencryption import CryptoError, check_key, clear_pngs, decrypt_roi, key_check
+from steganography import MetadataNotFound, StegoError, load_png, save_png, validate_boxes
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+ENCRYPTED = os.path.join(BASE, "encrypted_frames")
+DECRYPTED = os.path.join(BASE, "decrypted_frames")
+
+
+class KeyMismatchError(CryptoError):
+    pass
+
+
+def decrypt_frame(frame, seed, division):
+    """Returns (restored_frame, meta). Decrypts ROIs based on the provided seed and division."""
+    seed, division = check_key(seed, division)
+    frame = np.ascontiguousarray(frame)
+
+    swapped = False                                  # tolerate a BGR<->RGB mismatch between save and load
+    try:
+        meta = extract_metadata(frame)
+    except MetadataNotFound:
+        flipped = np.ascontiguousarray(frame[..., ::-1])
+        meta = extract_metadata(flipped)             # raises MetadataNotFound if truly absent
+        frame, swapped = flipped, True
+
+    fh, fw = frame.shape[:2]
+    if (meta["frame_w"], meta["frame_h"]) != (fw, fh):
+        raise CryptoError(f"Frame is {fw}x{fh} but metadata says {meta['frame_w']}x{meta['frame_h']}.")
+
+    validate_boxes(meta["rois"], fw, fh)
+
+    out = frame.copy()
+    for i in reversed(range(meta["roi_count"])):     # reverse of encryption order
+        x, y, w, h = meta["rois"][i][:4]
+        dec = decrypt_roi(out[y:y + h, x:x + w].copy(), seed, division, meta["frame_id"], i)
+        out[y:y + h, x:x + w] = dec
+    if swapped:
+        out = np.ascontiguousarray(out[..., ::-1])
+    return out, meta
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seed", required=True)
+    ap.add_argument("--factor", required=True)
+    ap.add_argument("--input", default=ENCRYPTED)
+    ap.add_argument("--output", default=DECRYPTED)
+    a = ap.parse_args(argv)
 
     try:
+        seed, factor = check_key(a.seed, a.factor)
+    except CryptoError as e:
+        print(f"ERROR: {e}", flush=True)
+        return 2
 
-        decrypted_frame, metadata = decrypt_frame(
-            frame
-        )
+    if not os.path.isdir(a.input):
+        print(f"ERROR: input folder not found: {a.input}", flush=True)
+        return 2
+    files = sorted(os.path.join(a.input, n) for n in os.listdir(a.input) if n.lower().endswith(".png"))
+    if not files:
+        print(f"ERROR: no PNG frames in {a.input}", flush=True)
+        return 2
 
-        # ----------------------------------------------------
-        # SAVE
-        # ----------------------------------------------------
+    clear_pngs(a.output)
+    failed, seen, total = [], set(), len(files)
+    for n, path in enumerate(files, 1):
+        name = os.path.basename(path)
+        try:
+            dec, meta = decrypt_frame(load_png(path), seed, factor)
+            fid = meta["frame_id"]
+            if fid in seen:
+                raise CryptoError(f"Duplicate frame ID {fid}.")
+            save_png(os.path.join(a.output, f"frame_{fid:06d}.png"), dec)
+            seen.add(fid)
+            print(f"[{n}/{total}] {name} -> frame {fid}  ROIs={meta['roi_count']}", flush=True)
+        except (StegoError, CryptoError, OSError) as e:
+            failed.append((name, str(e)))
+            print(f"[{n}/{total}] FAILED {name}: {e}", flush=True)
 
-        output_name = (
-            f"frame_{metadata['frame_id']:06d}.png"
-        )
-
-        output_path = os.path.join(
-            DECRYPTED_DIR,
-            output_name
-        )
-
-        cv2.imwrite(
-            output_path,
-            decrypted_frame
-        )
-
-        successful += 1
-
-        print(
-            f"  Saved: {output_name}"
-        )
-
-        print()
-
-
-    except Exception as e:
-
-        print(
-            f"[ERROR] {filename}: {e}"
-        )
-
-        failed += 1
+    if failed:
+        print(f"ERROR: {len(failed)} of {total} frames FAILED and were NOT written. "
+              f"First: {failed[0][0]}: {failed[0][1]}", flush=True)
+        return 1
+    print(f"Done: {total} frames decrypted.", flush=True)
+    return 0
 
 
-# ============================================================
-# FINAL RESULTS
-# ============================================================
-
-print(
-    "=" * 60
-)
-
-print(
-    "             DECRYPTION COMPLETE"
-)
-
-print(
-    "=" * 60
-)
-
-print(
-    f"Successful: {successful}"
-)
-
-print(
-    f"Failed    : {failed}"
-)
-
-print(
-    f"Output    : {DECRYPTED_DIR}"
-)
-
-print(
-    "=" * 60
-)
+if __name__ == "__main__":
+    sys.exit(main())
